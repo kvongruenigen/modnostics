@@ -1,0 +1,18 @@
+Package: modnostics
+Type: Package
+Title: Evaluation of Model Diagnostics
+Version: 0.1.0
+Authors@R: c(
+    person(
+      "Kay", "von Grünigen",
+      email = "kay.vongruenigen@gmail.com",
+      role = c("aut", "cre")
+    )
+  )
+Description: This package provides tool for comprehensive model output generation
+             that should help evaluate the quality of a model. 
+             This is important since rarely model diagnostics are published and 
+             this should get normal routine and a gold standard.
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true

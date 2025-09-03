@@ -1,0 +1,242 @@
+---
+title: "Progress"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+First let's try to create the desired output. For this we need to fit a model to the data. We will use the `lmer()` function to fit a linear mixed-effect model (LMM) from the `lme4` package.
+
+```{r Load the Data}
+# Let's use the ChickWeight dataset from the datasets package, this shows the 
+# weights of chicks on different diets.
+data("ChickWeight", package = "datasets")
+cw <- ChickWeight
+summary(cw)
+```
+
+
+```{r Quick visualization of the data}
+library(ggplot2)
+ggplot(cw, aes(x = Time, y = weight, color = Diet, shape = Diet)) +
+  geom_point() +
+  # geom_line(aes(group = Chick)) +
+  # Make the plot more informative
+  # Add averaging lines per diet over it
+  stat_summary(fun = mean, geom = "line", aes(group = Diet), size = 1.2) +
+  # Add a standard error ribbon
+  stat_summary(fun.data = mean_se, geom = "ribbon", aes(fill = Diet), alpha = 0.2) +
+  scale_x_continuous(breaks = seq(0, 21, by = 2)) +
+  labs(title = "Chick Weight Over Time by Diet",
+       x = "Time (days)",
+       y = "Weight (grams)") +
+  theme_minimal()
+unique(cw$Time)
+
+```
+
+
+```{r Model fit}
+# Fit a linear mixed-effects model of Weight as a function of Diet and Time,
+# with random intercepts for each Chick.
+library(lme4)
+lmm <- lmer(weight ~ Diet + Time + (1 | Chick), data = cw)
+```
+
+
+```{r Model fit}
+model_formula <- lmm@call
+
+summary(lmm)
+
+```
+
+```{r}
+library(shiny)
+library(lme4)
+library(lmerTest)
+library(broom.mixed)
+library(performance)
+library(DT)
+library(dplyr)
+library(ggplot2)
+
+# Make function for dashboard
+dashboard <- function(model) {
+  
+  # Load model object
+  lmm <- model
+  ##############################################################################
+  model_command <- deparse(lmm@call)
+  model_formula <- as.character(lmm@call)[2]
+  # Make a list of the terms used in the model
+  model_terms <- all.vars(as.formula(model_formula))
+  # Make a list of the data classed of the data used in the model
+  data_classes <- sapply(eval(getCall(lmm)$data), class)
+  data_classes <- data_classes[names(data_classes) %in% model_terms]
+  
+  plot_data <- ggplot(data = lmm@frame, aes_string(x = model_terms[2], y = model_terms[1])) +
+    geom_point(aes(color = lmm@frame[[model_terms[3]]]), alpha = 0.6) +
+    labs(title = paste("Data Plot for", model_formula),
+         x = model_terms[2],
+         y = model_terms[1],
+         color = "Group") +
+    theme_minimal()
+  ##############################################################################
+  # Thresholds
+  p_threshold_norm <- 0.05
+  p_threshold_very <- 0.01
+  p_threshold_highly <- 0.001
+  resid_sd_threshold <- 10
+  
+  # Extract model stats
+  fixed <- broom.mixed::tidy(lmm, effects = "fixed", conf.int = TRUE) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 3)),
+           `Significance` = ifelse(p.value < p_threshold_highly, "***",
+                            ifelse(p.value < p_threshold_very, "**",
+                                   ifelse(p.value < p_threshold_norm, "*", ""))))
+  
+  rand  <- broom.mixed::tidy(lmm, effects = "ran_pars") %>%
+    mutate(across(where(is.numeric), ~ round(.x, 3)))
+  
+  fit_stats <- performance::model_performance(lmm) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 2)))
+  
+  # Residual SD flag
+  resid_sd <- sigma(lmm)
+  resid_flag <- ifelse(resid_sd > resid_sd_threshold, "⚠", "")
+  
+  
+  # Plots
+  ## Residuals vs Fitted Plot}
+  library(ggplot2)
+  
+  plot_resid_fitted <- ggplot(data.frame(
+    Fitted = fitted(lmm),
+    Residuals = resid(lmm)
+  ), aes(x = Fitted, y = Residuals)) +
+    geom_point(color = "steelblue", alpha = 0.6) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    theme_minimal() +
+    labs(title = "Residuals vs Fitted", x = "Fitted Values", y = "Residuals")
+  
+  
+  ## Q-Q Plot of Residuals}
+  plot_resid_qq <- ggplot(data.frame(
+    Theoretical = qqnorm(resid(lmm), plot.it = FALSE)$x,
+    Sample = qqnorm(resid(lmm), plot.it = FALSE)$y
+  ), aes(x = Theoretical, y = Sample)) +
+    geom_point(color = "darkgreen", alpha = 0.6) +
+    geom_abline(linetype = "dashed", color = "red") +
+    theme_minimal() +
+    labs(title = "Q-Q Plot of Residuals")
+  
+  
+  ## Random Effects Caterpillar Plot}
+  ranef_df <- broom.mixed::tidy(lmm, effects = "ran_vals", conf.int = TRUE)
+  
+  plot_random <- ggplot(ranef_df, aes(x = estimate, y = level)) +
+    geom_point(color = "purple") +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ term, scales = "free_x") +
+    theme_minimal() +
+    labs(title = "Random Effects Caterpillar Plot", x = "Estimate", y = "Chick")
+  
+  
+  ## Fixed Effects Plot}
+  fixed_plot <- ggplot(fixed, aes(x = estimate, y = term)) +
+    geom_point(color = "black") +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    theme_minimal() +
+    labs(title = "Fixed Effects Estimates", x = "Estimate", y = "Term")
+  
+  # UI
+  ui <- fluidPage(
+    titlePanel("Linear Mixed Model Evaluation"),
+    
+    fluidRow(
+      column(12, h2("Model Summary")),
+      column(12, verbatimTextOutput("model_summary"))
+    ),
+
+    ############################################################################
+    # fluidRow(
+    #   column(6, h3("Data"), plotOutput("plot_data")),
+    # ),
+    ############################################################################
+    
+    fluidRow(
+      column(6, h3("Fixed Effects"), DTOutput("fixed_effects")),
+      column(6, h3("Random Effects"), DTOutput("random_effects"))
+    ),
+    
+    fluidRow(
+      column(12, h3("Model Fit Statistics"), DTOutput("fit_stats"))
+    ),
+    
+    fluidRow(
+      column(6, h3("Residuals vs Fitted"), plotOutput("plot_resid_fitted")),
+      column(6, h3("Residuals Q-Q Plot"), plotOutput("plot_resid_qq"))
+    ),
+    
+    fluidRow(
+      column(6, h3("Random Effects Caterpillar"), plotOutput("plot_random")),
+      column(6, h3("Fixed Effects Coefficients"), plotOutput("plot_fixed"))
+    )
+  )
+  
+  # Server
+  server <- function(input, output, session) {
+    
+    output$fixed_effects <- renderDT({
+      datatable(fixed, options = list(pageLength = 5)) %>%
+        formatStyle("p.value",
+                    backgroundColor = styleInterval(p_threshold_norm, c("lightgreen", "")))
+    })
+    
+    output$random_effects <- renderDT({
+      datatable(rand, options = list(pageLength = 5))
+    })
+    
+    output$fit_stats <- renderDT({
+      fit_df <- as.data.frame(t(fit_stats))
+      names(fit_df) <- "Value"
+      fit_df$Value <- round(as.numeric(fit_df$Value), 2)
+      fit_df <- tibble::rownames_to_column(fit_df, "Metric")
+      
+      fit_df <- rbind(
+        fit_df,
+        data.frame(Metric = "Residual_SD", Value = round(resid_sd, 2))
+      )
+      
+      datatable(fit_df, options = list(dom = 't')) %>%
+        formatStyle("Value",
+                    backgroundColor = styleEqual(resid_sd, 
+                                                 ifelse(resid_sd > resid_sd_threshold, "#f8d7da", "lightgreen")))
+    output$plot_resid_fitted <- renderPlot({ plot_resid_fitted })
+    output$plot_resid_qq     <- renderPlot({ plot_resid_qq })
+    output$plot_random       <- renderPlot({ plot_random })
+    output$plot_fixed        <- renderPlot({ fixed_plot })
+    # output$plot_data        <- renderPlot({ plot_data })
+    })
+  }
+  
+  shinyApp(ui, server)
+}
+```
+
+
+```{r}
+# Data & Model
+cw <- ChickWeight
+lmm <- lmer(weight ~ Diet + Time + (1 | Chick), data = cw)
+lmm <- lmer(weight ~ Time + Diet + (1 | Chick), data = cw)
+# lmm <- lmer(Sepal.Length ~ Sepal.Width + (1 | Species), data = iris)
+dashboard(lmm)
+
+```
+
+
+
