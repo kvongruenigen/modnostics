@@ -13,6 +13,24 @@ Description: This package provides tool for comprehensive model output generatio
              that should help evaluate the quality of a model. 
              This is important since rarely model diagnostics are published and 
              this should get normal routine and a gold standard.
-License: What license is it under?
+License: MIT + file license
+Imports:
+  shiny,
+  lme4,
+  lmerTest,
+  broom.mixed,
+  performance,
+  DT,
+  dplyr,
+  ggplot2,
+  GGally,
+  influence.ME,
+  ggrepel,
+  patchwork,
+  effects
 Encoding: UTF-8
 LazyData: true
+RoxygenNote: 7.3.3
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
