@@ -9,6 +9,19 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
+# To Do's
+
+- Include VIF
+- Check for overfitting
+
+# Included
+
+- Linearity & Homoscedasticity: Residual vs fitted plot
+- Normality of residuals: Q-Q plot
+- Influential cases: Cook's D
+
+# Progress
+
 First let's try to create the desired output. For this we need to fit a model to the data. We will use the `lmer()` function to fit a linear mixed-effect model (LMM) from the `lme4` package.
 
 ```{r Load the Data}
@@ -68,6 +81,7 @@ library(GGally)
 library(influence.ME)
 library(ggrepel)
 library(patchwork)
+library(effects)
 
 # Make function for dashboard
 diagnose_lmm <- function(lmm) {
@@ -127,6 +141,8 @@ diagnose_lmm <- function(lmm) {
   # Residual SD flag
   resid_sd <- sigma(lmm)
   resid_flag <- ifelse(resid_sd > resid_sd_threshold, "⚠", "")
+  
+  overfitting <- lme4::isSingular(lmm, tol = 1e-4)
   
   ##############################################################################
   
@@ -240,13 +256,13 @@ diagnose_lmm <- function(lmm) {
       if (is.numeric(df[[var]])) {
         # Continuous predictor → line + ribbon
         p <- ggplot(df, aes_string(x = var, y = "fit")) +
-          geom_line(color = "steelblue", size = 1) +
+          geom_line(color = "steelblue", linewidth = 1) +
           geom_ribbon(aes(ymin = lower, ymax = upper),
                       alpha = 0.2, fill = "steelblue") +
           labs(
             title = paste("Effect of", var),
             x = var,
-            y = "Predicted response"
+            y = paste0("Predicted ", model_terms[1])
           )
       } else {
         # Categorical predictor → points + error bars
@@ -257,7 +273,7 @@ diagnose_lmm <- function(lmm) {
           labs(
             title = paste("Effect of", var),
             x = var,
-            y = "Predicted response"
+            y = paste0("Predicted ", model_terms[1])
           )
       }
       
@@ -266,7 +282,7 @@ diagnose_lmm <- function(lmm) {
     names(plots) <- names(eff)  # 👈 ensures list is keyed by predictor names
     plots
   }
-  
+  plots_effects <- gg_predictor_effects(lmm)
   ##############################################################################
   
   # UI
@@ -280,7 +296,10 @@ diagnose_lmm <- function(lmm) {
     ),
     
     fluidRow(
-      column(12, h3("Model Fit Statistics"), DTOutput("fit_stats"))
+      column(12, h3("Model Fit Statistics"), DTOutput("fit_stats")),
+      if (overfitting) {
+        column(12, strong("Warning: The model may be overfitting (singular fit)."), style = "color: red;")
+      }
     ),
 
     fluidRow(
@@ -305,7 +324,7 @@ diagnose_lmm <- function(lmm) {
     ),
     
     fluidRow(
-      column(12, h3("Predictor Effects"), uiOutput("all_effects"))
+      column(12, h3("Predictor Effects"), plotOutput("all_effects"))
     )
   )
   
@@ -336,8 +355,7 @@ diagnose_lmm <- function(lmm) {
     output$plot_pairs        <- renderPlot({ plot_pairs })
     output$plot_influence    <- renderPlot({ plot_influence })
     output$all_effects <- renderPlot({
-      plots <- gg_predictor_effects(lmm)
-      wrap_plots(plots)
+      wrap_plots(plots_effects, ncol = length(plots_effects))  # from patchwork
     })
   }
   
@@ -352,8 +370,8 @@ diagnose_lmm <- function(lmm) {
 cw <- ChickWeight
 lmm <- lmer(weight ~ Diet + Time + (1 | Chick), data = cw)
 # lmm <- lmer(weight ~ Time + Diet + (1 | Chick), data = cw)
-lmm <- lmer(Sepal.Length ~ Sepal.Width + (1 | Species), data = iris)
-dashboard(lmm)
+# lmm <- lmer(Sepal.Length ~ Sepal.Width + (1 | Species), data = iris)
+diagnose_lmm(lmm)
 ```
 
 
