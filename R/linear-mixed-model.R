@@ -50,16 +50,33 @@ diagnose_lmm <- function(lmm) {
 
   # Extract model stats
 
-  ## Fixed effects
-  fixed <- broom.mixed::tidy(lmm, effects = "fixed", conf.int = TRUE) %>%
+  # Create a copy that can safely provide p-values
+  if (!inherits(lmm, "lmerModLmerTest")) {
+    suppressMessages({
+      lmm_lmerTest <- try(lmerTest::as_lmerModLmerTest(lmm), silent = TRUE)
+    })
+    # If conversion fails, just use the original model (no p-values)
+    if (inherits(lmm_lmerTest, "try-error")) {
+      lmm_lmerTest <- lmm
+    }
+  } else {
+    lmm_lmerTest <- lmm
+  }
+
+  ## Fixed effects (from lmerTest model)
+  fixed <- broom.mixed::tidy(lmm_lmerTest, effects = "fixed", conf.int = TRUE) %>%
     mutate(across(where(is.numeric), ~ round(.x, 3)))
 
-  ## Convert to curated dataframe
+  ## Curate dataframe
   fixed_df <- fixed %>%
-    mutate(
-      conf_int = paste0("[", conf.low, ", ", conf.high, "]")
-    ) %>%
-    select(term, estimate, conf_int, p.value)
+    mutate(conf_int = paste0("[", conf.low, ", ", conf.high, "]"))
+
+  # Include p.value only if it exists
+  if ("p.value" %in% names(fixed_df)) {
+    fixed_df <- fixed_df %>% select(term, estimate, conf_int, p.value)
+  } else {
+    fixed_df <- fixed_df %>% select(term, estimate, conf_int)
+  }
 
   ## Random effects
   rand <- as.data.frame(VarCorr(lmm))[,c("vcov", "sdcor")] %>%
@@ -92,7 +109,7 @@ diagnose_lmm <- function(lmm) {
     Fitted = fitted(lmm),
     Residuals = scale(resid(lmm))
   ), aes(x = Fitted, y = Residuals)) +
-    geom_point(color = "steelblue", alpha = 0.6) +
+    geom_point(color = "#B163FF", alpha = 0.6) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
     theme_minimal() +
     labs(x = "Fitted Values", y = "Scaled Residuals")
@@ -119,8 +136,8 @@ diagnose_lmm <- function(lmm) {
   ranef_df <- broom.mixed::tidy(lmm, effects = "ran_vals", conf.int = TRUE)
 
   plot_random <- ggplot(ranef_df, aes(x = estimate, y = level)) +
-    geom_point(color = "purple") +
-    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    geom_point(color = "#CCCCFF") +
+    geom_errorbar(aes(xmin = conf.low, xmax = conf.high), orientation = "y", height = 0.2) +
     facet_wrap(~ term, scales = "free_x") +
     theme_minimal() +
     labs(x = "Estimate", y = model_terms[length(model_terms)])
@@ -164,7 +181,7 @@ diagnose_lmm <- function(lmm) {
   plot_influence <- ggplot(cooks_df, aes(x = CookD, y = Group)) +
     # Base points: flagged (red) vs safe (steelblue)
     geom_point(aes(color = CookD > cutoff), size = 3) +
-    scale_color_manual(values = c("FALSE" = "steelblue", "TRUE" = "red")) +
+    scale_color_manual(values = c("FALSE" = "#B163FF", "TRUE" = "red")) +
     # Cutoff line
     geom_vline(xintercept = cutoff, linetype = "dashed", color = "red") +
     # Labels for flagged clusters
@@ -193,22 +210,24 @@ diagnose_lmm <- function(lmm) {
       df <- as.data.frame(eff[[var]])
 
       if (is.numeric(df[[var]])) {
+
         # Continuous predictor → line + ribbon
         p <- ggplot(df, aes_string(x = var, y = "fit")) +
-          geom_line(color = "steelblue", linewidth = 1) +
+          geom_line(color = "#B163FF", linewidth = 1) +
           geom_ribbon(aes(ymin = lower, ymax = upper),
-                      alpha = 0.2, fill = "steelblue") +
+                      alpha = 0.2, fill = "#CCCCFF") +
           labs(
             title = paste("Effect of", var),
             x = var,
             y = paste0("Predicted ", model_terms[1])
           )
       } else {
+
         # Categorical predictor → points + error bars
         p <- ggplot(df, aes_string(x = var, y = "fit")) +
-          geom_point(size = 3, color = "steelblue") +
+          geom_point(size = 3, color = "#B163FF") +
           geom_errorbar(aes(ymin = lower, ymax = upper),
-                        width = 0.1, color = "steelblue") +
+                        width = 0.1, color = "") +
           labs(
             title = paste("Effect of", var),
             x = var,
@@ -272,11 +291,18 @@ diagnose_lmm <- function(lmm) {
 
     output$model_command <- renderText({ model_command })
 
-    output$fixed_effects <- renderDT({
-      datatable(fixed_df, options = list(pageLength = 5)) %>%
-        formatStyle("p.value",
-                    backgroundColor = styleInterval(p_threshold_norm, c("lightgreen", "")))
-    })
+    if ("p.value" %in% names(fixed_df)) {
+      output$fixed_effects <- renderDT({
+        datatable(fixed_df, options = list(pageLength = 5)) %>%
+          formatStyle("p.value",
+                      backgroundColor = styleInterval(p_threshold_norm, c("lightgreen", "")))
+      })
+    } else {
+      output$fixed_effects <- renderDT({
+        datatable(fixed_df, options = list(pageLength = 5))
+      })
+    }
+
 
     output$random_effects <- renderDT({
       datatable(rand, options = list(pageLength = 5)) %>%
