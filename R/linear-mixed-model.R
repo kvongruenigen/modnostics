@@ -110,6 +110,7 @@ diagnose_lmm <- function(lmm) {
     Residuals = scale(resid(lmm))
   ), aes(x = Fitted, y = Residuals)) +
     geom_point(color = "#B163FF", alpha = 0.6) +
+    geom_smooth(method = "loess", color = "#FF63D3", se = FALSE) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
     theme_minimal() +
     labs(x = "Fitted Values", y = "Scaled Residuals")
@@ -136,7 +137,7 @@ diagnose_lmm <- function(lmm) {
   ranef_df <- broom.mixed::tidy(lmm, effects = "ran_vals", conf.int = TRUE)
 
   plot_random <- ggplot(ranef_df, aes(x = estimate, y = level)) +
-    geom_point(color = "#CCCCFF") +
+    geom_point(color = "#B163FF") +
     geom_errorbar(aes(xmin = conf.low, xmax = conf.high), orientation = "y", height = 0.2) +
     facet_wrap(~ term, scales = "free_x") +
     theme_minimal() +
@@ -225,9 +226,9 @@ diagnose_lmm <- function(lmm) {
 
         # Categorical predictor → points + error bars
         p <- ggplot(df, aes_string(x = var, y = "fit")) +
-          geom_point(size = 3, color = "#B163FF") +
           geom_errorbar(aes(ymin = lower, ymax = upper),
-                        width = 0.1, color = "") +
+                        width = 0.1, color = "#FF63D3") +
+          geom_point(size = 3, color = "#B163FF") +
           labs(
             title = paste("Effect of", var),
             x = var,
