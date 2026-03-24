@@ -19,9 +19,10 @@ if (getRversion() >= "2.15.1") {
   utils::globalVariables(
     c(
       "CookD", "Fitted", "Group", "Residuals", "Std_Dev", "Variance",
-      "conf.high", "conf.low", "conf_int", "estimate", "fit", "group",
-      "level", "lower", "p.value", "sdcor", "term", "upper", "vcov",
-      "z.resid"
+      "Tolerance", "VIF", "above_cutoff", "conf.high", "conf.low",
+      "conf_int", "density", "estimate", "fit", "group", "level",
+      "lower", "p.value", "predictor_value", "rank", "sdcor", "term",
+      "upper", "vcov", "z.resid"
     )
   )
 }
@@ -156,7 +157,67 @@ if (getRversion() >= "2.15.1") {
 .get_diagnose_lmm_thresholds <- function() {
   list(
     p_value_highlight = 0.05,
-    residual_sd_highlight = 10
+    residual_sd_highlight = 10,
+    vif_moderate = 5,
+    vif_high = 10
+  )
+}
+
+.build_diagnose_lmm_collinearity_table <- function(lmm, thresholds) {
+  collinearity <- suppressMessages(
+    suppressWarnings(
+      try(as.data.frame(performance::check_collinearity(lmm)), silent = TRUE)
+    )
+  )
+
+  if (inherits(collinearity, "try-error") || nrow(collinearity) == 0) {
+    return(data.frame(
+      Term = "Not available",
+      VIF = NA_real_,
+      Tolerance = NA_real_,
+      Status = "Need at least two fixed-effect predictors for VIF."
+    ))
+  }
+
+  collinearity_df <- data.frame(
+    Term = collinearity[["Term"]],
+    VIF = round(collinearity[["VIF"]], 2),
+    Tolerance = round(collinearity[["Tolerance"]], 2)
+  )
+
+  dplyr::mutate(
+    collinearity_df,
+    Status = dplyr::case_when(
+      VIF >= thresholds$vif_high ~ "High",
+      VIF >= thresholds$vif_moderate ~ "Moderate",
+      TRUE ~ "Low"
+    )
+  )
+}
+
+.build_diagnose_lmm_influence_summary <- function(lmm, metadata) {
+  legacy_data_model <- .build_diagnose_lmm_influence_model(lmm)
+  infl <- .run_diagnose_lmm_influence(legacy_data_model, metadata$grouping_var)
+
+  cooks <- stats::cooks.distance(infl)
+  cooks_df <- dplyr::arrange(
+    dplyr::mutate(
+      data.frame(
+        Group = rownames(cooks),
+        CookD = as.numeric(cooks)
+      ),
+      CookD = round(CookD, 3)
+    ),
+    dplyr::desc(CookD)
+  )
+  cutoff <- 4 / max(nrow(cooks_df), 1)
+
+  dplyr::mutate(
+    cooks_df,
+    above_cutoff = CookD > cutoff,
+    rank = dplyr::row_number(),
+    cutoff = cutoff,
+    Flag = ifelse(above_cutoff, "Review", "OK")
   )
 }
 
@@ -178,6 +239,8 @@ if (getRversion() >= "2.15.1") {
 
 .build_diagnose_lmm_tables <- function(lmm, metadata, thresholds) {
   lmm_lmerTest <- .get_diagnose_lmm_lmer_test_model(lmm)
+  influence_df <- .build_diagnose_lmm_influence_summary(lmm, metadata)
+  collinearity_df <- .build_diagnose_lmm_collinearity_table(lmm, thresholds)
 
   fixed <- dplyr::mutate(
     broom.mixed::tidy(lmm_lmerTest, effects = "fixed", conf.int = TRUE),
@@ -223,6 +286,8 @@ if (getRversion() >= "2.15.1") {
     fixed_df = fixed_df,
     rand = rand,
     fit_stats_df = fit_stats_df,
+    collinearity_df = collinearity_df,
+    influence_df = influence_df,
     overfitting = overfitting,
     thresholds = thresholds
   )
@@ -236,9 +301,13 @@ if (getRversion() >= "2.15.1") {
 
   plots <- lapply(names(eff), function(var) {
     df <- as.data.frame(eff[[var]])
+    df$predictor_value <- df[[var]]
 
     if (is.numeric(df[[var]])) {
-      p <- ggplot2::ggplot(df, ggplot2::aes_string(x = var, y = "fit")) +
+      p <- ggplot2::ggplot(
+        df,
+        ggplot2::aes(x = predictor_value, y = fit)
+      ) +
         ggplot2::geom_line(color = "#B163FF", linewidth = 1) +
         ggplot2::geom_ribbon(
           ggplot2::aes(ymin = lower, ymax = upper),
@@ -251,7 +320,10 @@ if (getRversion() >= "2.15.1") {
           y = paste0("Predicted ", response_var)
         )
     } else {
-      p <- ggplot2::ggplot(df, ggplot2::aes_string(x = var, y = "fit")) +
+      p <- ggplot2::ggplot(
+        df,
+        ggplot2::aes(x = predictor_value, y = fit)
+      ) +
         ggplot2::geom_errorbar(
           ggplot2::aes(ymin = lower, ymax = upper),
           width = 0.1,
@@ -272,13 +344,17 @@ if (getRversion() >= "2.15.1") {
   plots
 }
 
-.build_diagnose_lmm_plots <- function(lmm, metadata, fixed) {
+.build_diagnose_lmm_plots <- function(lmm, metadata, fixed, influence_df) {
   legacy_data_model <- .build_diagnose_lmm_influence_model(lmm)
-
-  plot_resid_fitted <- ggplot2::ggplot(data.frame(
+  residual_df <- data.frame(
     Fitted = stats::fitted(lmm),
-    Residuals = scale(stats::resid(lmm))
-  ), ggplot2::aes(x = Fitted, y = Residuals)) +
+    Residuals = as.numeric(scale(stats::resid(lmm)))
+  )
+
+  plot_resid_fitted <- ggplot2::ggplot(
+    residual_df,
+    ggplot2::aes(x = Fitted, y = Residuals)
+  ) +
     ggplot2::geom_point(color = "#B163FF", alpha = 0.6) +
     ggplot2::geom_smooth(method = "loess", color = "#FF63D3", se = FALSE) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
@@ -286,11 +362,8 @@ if (getRversion() >= "2.15.1") {
     ggplot2::labs(x = "Fitted Values", y = "Scaled Residuals")
 
   plot_resid_qq <-  ggplot2::ggplot(
-    data.frame(
-      z.resid = scale(stats::resid(lmm)),
-      fitted = stats::fitted(lmm)
-    ),
-    ggplot2::aes(sample = z.resid)
+    residual_df,
+    ggplot2::aes(sample = Residuals)
   ) +
     ggplot2::stat_qq() +
     ggplot2::geom_abline(
@@ -299,6 +372,28 @@ if (getRversion() >= "2.15.1") {
       col = "red"
     ) +
     ggplot2::labs(x = "Theoretical quantiles", y = "Sample Quantiles") +
+    ggplot2::theme_minimal()
+
+  plot_resid_distribution <- ggplot2::ggplot(
+    residual_df,
+    ggplot2::aes(x = Residuals)
+  ) +
+    ggplot2::geom_histogram(
+      ggplot2::aes(y = ggplot2::after_stat(density)),
+      bins = 20,
+      fill = "#CCCCFF",
+      color = "white"
+    ) +
+    ggplot2::geom_density(color = "#B163FF", linewidth = 1) +
+    ggplot2::geom_vline(
+      xintercept = c(-2, 0, 2),
+      linetype = c("dotted", "dashed", "dotted"),
+      color = c("#999999", "red", "#999999")
+    ) +
+    ggplot2::labs(
+      x = "Scaled Residuals",
+      y = "Density"
+    ) +
     ggplot2::theme_minimal()
 
   ranef_df <- broom.mixed::tidy(lmm, effects = "ran_vals", conf.int = TRUE)
@@ -316,8 +411,9 @@ if (getRversion() >= "2.15.1") {
 
   fixed_plot <- ggplot2::ggplot(fixed, ggplot2::aes(x = estimate, y = term)) +
     ggplot2::geom_point(color = "black") +
-    ggplot2::geom_errorbarh(
+    ggplot2::geom_errorbar(
       ggplot2::aes(xmin = conf.low, xmax = conf.high),
+      orientation = "y",
       height = 0.2
     ) +
     ggplot2::theme_minimal() +
@@ -329,22 +425,17 @@ if (getRversion() >= "2.15.1") {
       strip.text = ggplot2::element_text(size = 8),
       axis.text = ggplot2::element_text(size = 6)
     )
+  cutoff <- unique(influence_df$cutoff)[1]
 
-  infl <- .run_diagnose_lmm_influence(legacy_data_model, metadata$grouping_var)
-
-  cooks <- stats::cooks.distance(infl)
-  cooks_df <- data.frame(
-    Group = rownames(cooks),
-    CookD = as.numeric(cooks)
-  )
-  cutoff <- 4 / length(cooks)
-
-  plot_influence <- ggplot2::ggplot(cooks_df, ggplot2::aes(x = CookD, y = Group)) +
-    ggplot2::geom_point(ggplot2::aes(color = CookD > cutoff), size = 3) +
+  plot_influence <- ggplot2::ggplot(
+    influence_df,
+    ggplot2::aes(x = CookD, y = stats::reorder(Group, CookD))
+  ) +
+    ggplot2::geom_point(ggplot2::aes(color = above_cutoff), size = 3) +
     ggplot2::scale_color_manual(values = c("FALSE" = "#B163FF", "TRUE" = "red")) +
     ggplot2::geom_vline(xintercept = cutoff, linetype = "dashed", color = "red") +
     ggrepel::geom_text_repel(
-      data = base::subset(cooks_df, CookD > cutoff),
+      data = base::subset(influence_df, above_cutoff),
       ggplot2::aes(label = Group),
       color = "black",
       nudge_x = 0.01
@@ -364,6 +455,7 @@ if (getRversion() >= "2.15.1") {
   list(
     plot_resid_fitted = plot_resid_fitted,
     plot_resid_qq = plot_resid_qq,
+    plot_resid_distribution = plot_resid_distribution,
     plot_random = plot_random,
     fixed_plot = fixed_plot,
     plot_pairs = plot_pairs,
@@ -448,32 +540,53 @@ if (getRversion() >= "2.15.1") {
 
     shiny::fluidRow(
       shiny::column(
-        6,
+        4,
         shiny::h3("Residuals vs Fitted"),
         shiny::p(style = "color: #555;", guidance_text$residual_fitted),
         shiny::plotOutput("plot_resid_fitted")
       ),
       shiny::column(
-        6,
+        4,
         shiny::h3("Residuals Q-Q Plot"),
         shiny::p(style = "color: #555;", guidance_text$residual_qq),
         shiny::plotOutput("plot_resid_qq")
+      ),
+      shiny::column(
+        4,
+        shiny::h3("Residual Distribution"),
+        shiny::p(style = "color: #555;", guidance_text$residual_distribution),
+        shiny::plotOutput("plot_resid_distribution")
       )
     ),
 
 
     shiny::fluidRow(
       shiny::column(
-        6,
+        8,
         shiny::h3("Cook's D"),
         shiny::p(style = "color: #555;", guidance_text$influence),
         shiny::plotOutput("plot_influence")
       ),
       shiny::column(
+        4,
+        shiny::h3("Influence Summary"),
+        shiny::p(style = "color: #555;", guidance_text$influence_table),
+        DT::DTOutput("influence_summary")
+      )
+    ),
+
+    shiny::fluidRow(
+      shiny::column(
         6,
         shiny::h3("Variable Correlations"),
         shiny::p(style = "color: #555;", guidance_text$correlations),
         shiny::plotOutput("plot_pairs")
+      ),
+      shiny::column(
+        6,
+        shiny::h3("Collinearity (VIF)"),
+        shiny::p(style = "color: #555;", guidance_text$collinearity),
+        DT::DTOutput("collinearity")
       ),
     ),
 
@@ -532,13 +645,25 @@ if (getRversion() >= "2.15.1") {
       "Points close to the reference line are more consistent with normal residuals.",
       "Systematic departures in the tails may suggest skewness, heavy tails, or influential observations."
     ),
+    residual_distribution = paste(
+      "This histogram and density curve make it easier to see skewness, heavy tails, or unusually wide spread.",
+      "Large piles in the tails or strong asymmetry can support what you see in the Q-Q plot."
+    ),
     influence = paste(
       "Clusters above the Cook's D cutoff deserve a second look.",
       "Influential cases are not automatically wrong, but they may justify sensitivity analyses."
     ),
+    influence_table = paste(
+      "Use this table to rank the most influential clusters and see which ones cross the heuristic cutoff.",
+      "Start by reviewing flagged groups, then compare conclusions with and without them if needed."
+    ),
     correlations = paste(
       "Strong predictor correlations can complicate interpretation and inflate uncertainty.",
       "If you see strong overlap, check whether collinearity is affecting the model."
+    ),
+    collinearity = paste(
+      "Variance inflation factors quantify how strongly predictors overlap in the fitted model.",
+      "Values around 5 deserve attention, and values around 10 usually warrant closer review."
     ),
     predictor_effects = paste(
       "These plots show how the fitted model translates predictors into expected outcomes.",
@@ -581,9 +706,50 @@ if (getRversion() >= "2.15.1") {
     })
 
     output$fit_stats <- DT::renderDataTable({ tables$fit_stats_df })
+    output$collinearity <- DT::renderDT({
+      collinearity_table <- DT::datatable(
+        tables$collinearity_df,
+        options = list(pageLength = 5, dom = "t"),
+        rownames = FALSE
+      )
+
+      if ("VIF" %in% names(tables$collinearity_df) &&
+          all(is.na(tables$collinearity_df$VIF))) {
+        return(collinearity_table)
+      }
+
+      DT::formatStyle(
+        collinearity_table,
+        "VIF",
+        backgroundColor = DT::styleInterval(
+          c(
+            tables$thresholds$vif_moderate,
+            tables$thresholds$vif_high
+          ),
+          c("", "#fff3cd", "#f8d7da")
+        )
+      )
+    })
+    output$influence_summary <- DT::renderDT({
+      DT::formatStyle(
+        DT::datatable(
+          tables$influence_df[, c("rank", "Group", "CookD", "Flag")],
+          options = list(pageLength = 8, dom = "t"),
+          rownames = FALSE
+        ),
+        "Flag",
+        backgroundColor = DT::styleEqual(
+          c("OK", "Review"),
+          c("", "#f8d7da")
+        )
+      )
+    })
 
     output$plot_resid_fitted <- shiny::renderPlot({ plots$plot_resid_fitted })
     output$plot_resid_qq     <- shiny::renderPlot({ plots$plot_resid_qq })
+    output$plot_resid_distribution <- shiny::renderPlot({
+      plots$plot_resid_distribution
+    })
     output$plot_random       <- shiny::renderPlot({ plots$plot_random })
     output$plot_fixed        <- shiny::renderPlot({ plots$fixed_plot })
     output$plot_pairs        <- shiny::renderPlot({ plots$plot_pairs })
@@ -604,7 +770,7 @@ diagnose_lmm <- function(lmm) {
   metadata <- .get_diagnose_lmm_metadata(lmm)
   thresholds <- .get_diagnose_lmm_thresholds()
   tables <- .build_diagnose_lmm_tables(lmm, metadata, thresholds)
-  plots <- .build_diagnose_lmm_plots(lmm, metadata, tables$fixed)
+  plots <- .build_diagnose_lmm_plots(lmm, metadata, tables$fixed, tables$influence_df)
   ui <- .build_diagnose_lmm_ui(tables$overfitting)
   server <- .build_diagnose_lmm_server(metadata$model_command, tables, plots)
 
