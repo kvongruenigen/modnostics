@@ -376,9 +376,22 @@ if (getRversion() >= "2.15.1") {
 }
 
 .build_diagnose_lmm_ui <- function(overfitting) {
+  guidance_text <- .get_diagnose_lmm_guidance(overfitting)
+
   shiny::fluidPage(
 
     shiny::titlePanel("Linear Mixed Model Evaluation"),
+
+    shiny::fluidRow(
+      shiny::column(
+        12,
+        shiny::tags$div(
+          style = "margin-bottom: 18px; padding: 12px; background-color: #f7f7f7; border-left: 4px solid #4a6fa5;",
+          shiny::h4("How To Read This Dashboard"),
+          shiny::p(guidance_text$overview)
+        )
+      )
+    ),
 
     shiny::fluidRow(
       shiny::column(12, shiny::h3("Command")),
@@ -387,6 +400,13 @@ if (getRversion() >= "2.15.1") {
 
     shiny::fluidRow(
       shiny::column(12, shiny::h3("Model Fit Statistics"), DT::DTOutput("fit_stats")),
+      shiny::column(
+        12,
+        shiny::p(
+          style = "color: #555;",
+          guidance_text$model_fit
+        )
+      ),
       if (overfitting) {
         shiny::column(
           12,
@@ -397,28 +417,132 @@ if (getRversion() >= "2.15.1") {
     ),
 
     shiny::fluidRow(
-      shiny::column(6, shiny::h3("Fixed Effects"), DT::DTOutput("fixed_effects")),
-      shiny::column(6, shiny::h3("Random Effects"), DT::DTOutput("random_effects"))
+      shiny::column(
+        6,
+        shiny::h3("Fixed Effects"),
+        shiny::p(style = "color: #555;", guidance_text$fixed_effects),
+        DT::DTOutput("fixed_effects")
+      ),
+      shiny::column(
+        6,
+        shiny::h3("Random Effects"),
+        shiny::p(style = "color: #555;", guidance_text$random_effects),
+        DT::DTOutput("random_effects")
+      )
     ),
 
     shiny::fluidRow(
-      shiny::column(6, shiny::h3("Fixed Effects Coefficients"), shiny::plotOutput("plot_fixed")),
-      shiny::column(6, shiny::h3("Random Effects Caterpillar"), shiny::plotOutput("plot_random"))
+      shiny::column(
+        6,
+        shiny::h3("Fixed Effects Coefficients"),
+        shiny::p(style = "color: #555;", guidance_text$fixed_plot),
+        shiny::plotOutput("plot_fixed")
+      ),
+      shiny::column(
+        6,
+        shiny::h3("Random Effects Caterpillar"),
+        shiny::p(style = "color: #555;", guidance_text$random_plot),
+        shiny::plotOutput("plot_random")
+      )
     ),
 
     shiny::fluidRow(
-      shiny::column(6, shiny::h3("Residuals vs Fitted"), shiny::plotOutput("plot_resid_fitted")),
-      shiny::column(6, shiny::h3("Residuals Q-Q Plot"), shiny::plotOutput("plot_resid_qq"))
+      shiny::column(
+        6,
+        shiny::h3("Residuals vs Fitted"),
+        shiny::p(style = "color: #555;", guidance_text$residual_fitted),
+        shiny::plotOutput("plot_resid_fitted")
+      ),
+      shiny::column(
+        6,
+        shiny::h3("Residuals Q-Q Plot"),
+        shiny::p(style = "color: #555;", guidance_text$residual_qq),
+        shiny::plotOutput("plot_resid_qq")
+      )
     ),
 
 
     shiny::fluidRow(
-      shiny::column(6, shiny::h3("Cook's D"), shiny::plotOutput("plot_influence")),
-      shiny::column(6, shiny::h3("Variable Correlations"), shiny::plotOutput("plot_pairs")),
+      shiny::column(
+        6,
+        shiny::h3("Cook's D"),
+        shiny::p(style = "color: #555;", guidance_text$influence),
+        shiny::plotOutput("plot_influence")
+      ),
+      shiny::column(
+        6,
+        shiny::h3("Variable Correlations"),
+        shiny::p(style = "color: #555;", guidance_text$correlations),
+        shiny::plotOutput("plot_pairs")
+      ),
     ),
 
     shiny::fluidRow(
-      shiny::column(12, shiny::h3("Predictor Effects"), shiny::plotOutput("all_effects"))
+      shiny::column(
+        12,
+        shiny::h3("Predictor Effects"),
+        shiny::p(style = "color: #555;", guidance_text$predictor_effects),
+        shiny::plotOutput("all_effects")
+      )
+    )
+  )
+}
+
+.get_diagnose_lmm_guidance <- function(overfitting) {
+  singular_note <- if (overfitting) {
+    paste(
+      "This model was flagged as singular, so treat variance components and",
+      "random-effects interpretation cautiously."
+    )
+  } else {
+    "No singular-fit warning was detected, but model assumptions should still be checked visually."
+  }
+
+  list(
+    overview = paste(
+      "Use this dashboard as a structured review rather than a pass/fail checklist.",
+      "Look for patterns that suggest follow-up modelling decisions, then confirm those",
+      "decisions in the context of your study design and domain knowledge."
+    ),
+    model_fit = paste(
+      "These summaries describe overall model fit and complexity.",
+      singular_note
+    ),
+    fixed_effects = paste(
+      "Review estimates, confidence intervals, and p-values together.",
+      "Small p-values can be useful, but effect size, direction, and uncertainty often matter more."
+    ),
+    random_effects = paste(
+      "Random-effects estimates help you judge how much variation is attributed to grouping structure.",
+      "Very small variance estimates can indicate limited group-level signal."
+    ),
+    fixed_plot = paste(
+      "This coefficient plot is a quick visual check of direction and uncertainty.",
+      "Effects with intervals far from zero usually provide stronger evidence of a stable association."
+    ),
+    random_plot = paste(
+      "Use the caterpillar plot to see how group-level deviations are distributed.",
+      "Large spread suggests meaningful between-group variation."
+    ),
+    residual_fitted = paste(
+      "A good residuals-vs-fitted plot usually looks patternless and centered around zero.",
+      "Curvature or funnel shapes can suggest nonlinearity or non-constant variance."
+    ),
+    residual_qq = paste(
+      "Points close to the reference line are more consistent with normal residuals.",
+      "Systematic departures in the tails may suggest skewness, heavy tails, or influential observations."
+    ),
+    influence = paste(
+      "Clusters above the Cook's D cutoff deserve a second look.",
+      "Influential cases are not automatically wrong, but they may justify sensitivity analyses."
+    ),
+    correlations = paste(
+      "Strong predictor correlations can complicate interpretation and inflate uncertainty.",
+      "If you see strong overlap, check whether collinearity is affecting the model."
+    ),
+    predictor_effects = paste(
+      "These plots show how the fitted model translates predictors into expected outcomes.",
+      "Use them to explain practical meaning, not just statistical significance."
     )
   )
 }
