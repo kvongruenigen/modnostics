@@ -1,13 +1,86 @@
 #' Diagnose a Linear Mixed Model
 #'
-#' This function launches a Shiny dashboard to inspect diagnostics of an LMM.
+#' This function launches a Shiny dashboard to inspect diagnostics of a
+#' supported linear mixed-effects model.
 #'
-#' @param lmm A fitted `lmer` model.
+#' Supported inputs are currently limited to fitted `lmer` models with:
+#' \itemize{
+#'   \item exactly one random-effects grouping term,
+#'   \item an intercept-only random-effects structure of the form
+#'   \code{(1 | group)}, and
+#'   \item a `data` argument supplied as a named object.
+#' }
+#'
+#' @param lmm A fitted `lmer` model that matches the currently supported model
+#'   structure.
 #' @return A Shiny app object.
 #' @export
 
+# Validate the subset of lmer models currently supported by the dashboard.
+validate_diagnose_lmm_input <- function(lmm) {
+  if (!inherits(lmm, c("lmerMod", "lmerModLmerTest"))) {
+    stop(
+      paste(
+        "`diagnose_lmm()` requires a fitted `lmer` model from `lme4` or",
+        "`lmerTest`."
+      ),
+      call. = FALSE
+    )
+  }
+
+  model_formula <- stats::formula(lmm)
+  random_terms <- suppressWarnings(lme4::findbars(model_formula))
+
+  if (length(random_terms) != 1) {
+    stop(
+      paste(
+        "`diagnose_lmm()` currently supports models with exactly one",
+        "random-effects term."
+      ),
+      call. = FALSE
+    )
+  }
+
+  random_term <- random_terms[[1]]
+
+  if (!identical(random_term[[2]], quote(1))) {
+    stop(
+      paste(
+        "`diagnose_lmm()` currently supports intercept-only random-effects",
+        "terms of the form `(1 | group)`."
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!is.symbol(random_term[[3]])) {
+    stop(
+      paste(
+        "`diagnose_lmm()` currently supports a single grouping variable named",
+        "directly in the model formula."
+      ),
+      call. = FALSE
+    )
+  }
+
+  data_expr <- getCall(lmm)$data
+
+  if (is.null(data_expr) || !is.symbol(data_expr)) {
+    stop(
+      paste(
+        "`diagnose_lmm()` currently requires the model `data` argument to be",
+        "a named object."
+      ),
+      call. = FALSE
+    )
+  }
+
+  invisible(NULL)
+}
+
 # Make function for dashboard
 diagnose_lmm <- function(lmm) {
+  validate_diagnose_lmm_input(lmm)
 
   # Load required packages
   library(shiny)

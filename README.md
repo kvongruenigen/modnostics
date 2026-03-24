@@ -11,6 +11,12 @@ that brings together:
 - influence diagnostics
 - predictor effect visualizations
 
+Current supported model scope:
+- fitted `lmer` models
+- exactly one random-effects term
+- intercept-only random effects of the form `(1 | group)`
+- a model `data` argument supplied as a named object
+
 ## Installation
 
 The package is not published on CRAN yet. For local development:
