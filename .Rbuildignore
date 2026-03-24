@@ -2,3 +2,15 @@
 ^renv\.lock$
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^Progress\.Rmd$
+^notes\.md$
+^BACKLOG\.md$
+^AGENTS\.md$
+^\.\.Rcheck$
+^.*\.Rcheck$
+^\.DS_Store$
+^\.Rhistory$
+^\.Rprofile$
+^\.gitignore$
+^\.git$
+^.*\.tar\.gz$

@@ -2,5 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
+.Rprofile
+.DS_Store
+..Rcheck/
+*.Rcheck/
+*.tar.gz
 Progress.Rmd
 notes.md
