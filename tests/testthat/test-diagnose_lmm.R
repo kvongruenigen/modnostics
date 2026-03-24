@@ -1,6 +1,8 @@
 test_that("diagnose_lmm works", {
-  sleepstudy <- lme4::sleepstudy
-  lmm <- lme4::lmer(Reaction ~ Days + (1|Subject), data = sleepstudy)
+  assign("sleepstudy_test", lme4::sleepstudy, envir = .GlobalEnv)
+  on.exit(rm("sleepstudy_test", envir = .GlobalEnv), add = TRUE)
+
+  lmm <- lme4::lmer(Reaction ~ Days + (1|Subject), data = sleepstudy_test)
   expect_s3_class(diagnose_lmm(lmm), "shiny.appobj")
 })
 

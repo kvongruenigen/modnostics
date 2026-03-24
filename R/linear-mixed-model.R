@@ -15,6 +15,17 @@
 #' @return A Shiny app object.
 #' @export
 
+if (getRversion() >= "2.15.1") {
+  utils::globalVariables(
+    c(
+      "CookD", "Fitted", "Group", "Residuals", "Std_Dev", "Variance",
+      "conf.high", "conf.low", "conf_int", "estimate", "fit", "group",
+      "level", "lower", "p.value", "sdcor", "term", "upper", "vcov",
+      "z.resid"
+    )
+  )
+}
+
 # Extract model metadata using stable accessors rather than direct slot parsing.
 .get_diagnose_lmm_metadata <- function(lmm) {
   model_formula <- stats::formula(lmm)
@@ -25,7 +36,7 @@
   fixed_vars <- setdiff(all.vars(fixed_formula), response_var)
 
   list(
-    model_command = paste(deparse(getCall(lmm)), collapse = "\n"),
+    model_command = paste(deparse(stats::getCall(lmm)), collapse = "\n"),
     model_formula = model_formula,
     model_frame = model_frame,
     response_var = response_var,
@@ -41,6 +52,40 @@
   lmm_influence <- lmm
   lmm_influence@call$data <- quote(data.update)
   lmm_influence
+}
+
+.with_diagnose_lmm_data_update <- function(model, code) {
+  had_data_update <- exists("data.update", envir = .GlobalEnv, inherits = FALSE)
+
+  if (had_data_update) {
+    old_data_update <- get("data.update", envir = .GlobalEnv, inherits = FALSE)
+  }
+
+  assign("data.update", stats::model.frame(model), envir = .GlobalEnv)
+
+  on.exit(
+    {
+      if (had_data_update) {
+        assign("data.update", old_data_update, envir = .GlobalEnv)
+      } else if (exists("data.update", envir = .GlobalEnv, inherits = FALSE)) {
+        rm("data.update", envir = .GlobalEnv)
+      }
+    },
+    add = TRUE
+  )
+
+  force(code)
+}
+
+.run_diagnose_lmm_influence <- function(model, grouping_var) {
+  if (!("package:nlme" %in% search())) {
+    base::attachNamespace(asNamespace("nlme"))
+  }
+
+  .with_diagnose_lmm_data_update(
+    model,
+    influence.ME::influence(model, group = grouping_var)
+  )
 }
 
 # Validate the subset of lmer models currently supported by the dashboard.
@@ -134,30 +179,42 @@
 .build_diagnose_lmm_tables <- function(lmm, metadata, thresholds) {
   lmm_lmerTest <- .get_diagnose_lmm_lmer_test_model(lmm)
 
-  fixed <- broom.mixed::tidy(lmm_lmerTest, effects = "fixed", conf.int = TRUE) %>%
-    mutate(across(where(is.numeric), ~ round(.x, 3)))
+  fixed <- dplyr::mutate(
+    broom.mixed::tidy(lmm_lmerTest, effects = "fixed", conf.int = TRUE),
+    dplyr::across(dplyr::where(is.numeric), ~ round(.x, 3))
+  )
 
-  fixed_df <- fixed %>%
-    mutate(conf_int = paste0("[", conf.low, ", ", conf.high, "]"))
+  fixed_df <- dplyr::mutate(
+    fixed,
+    conf_int = paste0("[", conf.low, ", ", conf.high, "]")
+  )
 
   if ("p.value" %in% names(fixed_df)) {
-    fixed_df <- fixed_df %>% select(term, estimate, conf_int, p.value)
+    fixed_df <- dplyr::select(fixed_df, term, estimate, conf_int, p.value)
   } else {
-    fixed_df <- fixed_df %>% select(term, estimate, conf_int)
+    fixed_df <- dplyr::select(fixed_df, term, estimate, conf_int)
   }
 
-  rand <- as.data.frame(VarCorr(lmm))[,c("vcov", "sdcor")] %>%
-    mutate(
+  rand <- dplyr::select(
+    dplyr::mutate(
+      as.data.frame(lme4::VarCorr(lmm))[, c("vcov", "sdcor")],
       group = c(paste0(metadata$grouping_var, " (Intercept)"), "Residual"),
       Variance = round(vcov, 3),
       Std_Dev = round(sdcor, 3)
-    ) %>%
-    select(group, Variance, Std_Dev)
+    ),
+    group,
+    Variance,
+    Std_Dev
+  )
 
-  fit_stats <- performance::model_performance(lmm) %>%
-    mutate(across(where(is.numeric), ~ round(.x, 2)))
-  fit_stats_df <- as.data.frame(fit_stats) %>%
-    dplyr::mutate(across(where(is.numeric), ~ round(.x, 2)))
+  fit_stats <- dplyr::mutate(
+    performance::model_performance(lmm),
+    dplyr::across(dplyr::where(is.numeric), ~ round(.x, 2))
+  )
+  fit_stats_df <- dplyr::mutate(
+    as.data.frame(fit_stats),
+    dplyr::across(dplyr::where(is.numeric), ~ round(.x, 2))
+  )
 
   overfitting <- lme4::isSingular(lmm, tol = 1e-4)
 
@@ -172,40 +229,43 @@
 }
 
 .build_diagnose_lmm_effect_plots <- function(model, response_var) {
-  eff <- predictorEffects(model)
+  eff <- .with_diagnose_lmm_data_update(
+    model,
+    effects::predictorEffects(model)
+  )
 
   plots <- lapply(names(eff), function(var) {
     df <- as.data.frame(eff[[var]])
 
     if (is.numeric(df[[var]])) {
-      p <- ggplot(df, aes_string(x = var, y = "fit")) +
-        geom_line(color = "#B163FF", linewidth = 1) +
-        geom_ribbon(
-          aes(ymin = lower, ymax = upper),
+      p <- ggplot2::ggplot(df, ggplot2::aes_string(x = var, y = "fit")) +
+        ggplot2::geom_line(color = "#B163FF", linewidth = 1) +
+        ggplot2::geom_ribbon(
+          ggplot2::aes(ymin = lower, ymax = upper),
           alpha = 0.2,
           fill = "#CCCCFF"
         ) +
-        labs(
+        ggplot2::labs(
           title = paste("Effect of", var),
           x = var,
           y = paste0("Predicted ", response_var)
         )
     } else {
-      p <- ggplot(df, aes_string(x = var, y = "fit")) +
-        geom_errorbar(
-          aes(ymin = lower, ymax = upper),
+      p <- ggplot2::ggplot(df, ggplot2::aes_string(x = var, y = "fit")) +
+        ggplot2::geom_errorbar(
+          ggplot2::aes(ymin = lower, ymax = upper),
           width = 0.1,
           color = "#FF63D3"
         ) +
-        geom_point(size = 3, color = "#B163FF") +
-        labs(
+        ggplot2::geom_point(size = 3, color = "#B163FF") +
+        ggplot2::labs(
           title = paste("Effect of", var),
           x = var,
           y = paste0("Predicted ", response_var)
         )
     }
 
-    p + theme_minimal()
+    p + ggplot2::theme_minimal()
   })
 
   names(plots) <- names(eff)
@@ -213,86 +273,93 @@
 }
 
 .build_diagnose_lmm_plots <- function(lmm, metadata, fixed) {
-  influence_model <- .build_diagnose_lmm_influence_model(lmm)
+  legacy_data_model <- .build_diagnose_lmm_influence_model(lmm)
 
-  plot_resid_fitted <- ggplot(data.frame(
-    Fitted = fitted(lmm),
-    Residuals = scale(resid(lmm))
-  ), aes(x = Fitted, y = Residuals)) +
-    geom_point(color = "#B163FF", alpha = 0.6) +
-    geom_smooth(method = "loess", color = "#FF63D3", se = FALSE) +
-    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-    theme_minimal() +
-    labs(x = "Fitted Values", y = "Scaled Residuals")
+  plot_resid_fitted <- ggplot2::ggplot(data.frame(
+    Fitted = stats::fitted(lmm),
+    Residuals = scale(stats::resid(lmm))
+  ), ggplot2::aes(x = Fitted, y = Residuals)) +
+    ggplot2::geom_point(color = "#B163FF", alpha = 0.6) +
+    ggplot2::geom_smooth(method = "loess", color = "#FF63D3", se = FALSE) +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(x = "Fitted Values", y = "Scaled Residuals")
 
-  plot_resid_qq <-  ggplot(
+  plot_resid_qq <-  ggplot2::ggplot(
     data.frame(
-      z.resid = scale(resid(lmm)),
-      fitted = fitted(lmm)
+      z.resid = scale(stats::resid(lmm)),
+      fitted = stats::fitted(lmm)
     ),
-    aes(sample = z.resid)
+    ggplot2::aes(sample = z.resid)
   ) +
-    stat_qq() +
-    geom_abline(
+    ggplot2::stat_qq() +
+    ggplot2::geom_abline(
       intercept = 0,
       slope = 1,
       col = "red"
     ) +
-    labs(x = "Theoretical quantiles", y = "Sample Quantiles") +
-    theme_minimal()
+    ggplot2::labs(x = "Theoretical quantiles", y = "Sample Quantiles") +
+    ggplot2::theme_minimal()
 
   ranef_df <- broom.mixed::tidy(lmm, effects = "ran_vals", conf.int = TRUE)
 
-  plot_random <- ggplot(ranef_df, aes(x = estimate, y = level)) +
-    geom_point(color = "#B163FF") +
-    geom_errorbar(aes(xmin = conf.low, xmax = conf.high), orientation = "y", height = 0.2) +
-    facet_wrap(~ term, scales = "free_x") +
-    theme_minimal() +
-    labs(x = "Estimate", y = metadata$grouping_var)
+  plot_random <- ggplot2::ggplot(ranef_df, ggplot2::aes(x = estimate, y = level)) +
+    ggplot2::geom_point(color = "#B163FF") +
+    ggplot2::geom_errorbar(
+      ggplot2::aes(xmin = conf.low, xmax = conf.high),
+      orientation = "y",
+      height = 0.2
+    ) +
+    ggplot2::facet_wrap(~ term, scales = "free_x") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(x = "Estimate", y = metadata$grouping_var)
 
-  fixed_plot <- ggplot(fixed, aes(x = estimate, y = term)) +
-    geom_point(color = "black") +
-    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
-    theme_minimal() +
-    labs(x = "Estimate", y = "Term")
+  fixed_plot <- ggplot2::ggplot(fixed, ggplot2::aes(x = estimate, y = term)) +
+    ggplot2::geom_point(color = "black") +
+    ggplot2::geom_errorbarh(
+      ggplot2::aes(xmin = conf.low, xmax = conf.high),
+      height = 0.2
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(x = "Estimate", y = "Term")
 
-  plot_pairs <- ggpairs(metadata$model_frame[, metadata$fixed_vars, drop = FALSE]) +
-    theme_minimal() +
-    theme(
-      strip.text = element_text(size = 8),
-      axis.text = element_text(size = 6)
+  plot_pairs <- GGally::ggpairs(metadata$model_frame[, metadata$fixed_vars, drop = FALSE]) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(size = 8),
+      axis.text = ggplot2::element_text(size = 6)
     )
 
-  infl <- influence(influence_model, group = metadata$grouping_var)
+  infl <- .run_diagnose_lmm_influence(legacy_data_model, metadata$grouping_var)
 
-  cooks <- cooks.distance(infl)
+  cooks <- stats::cooks.distance(infl)
   cooks_df <- data.frame(
     Group = rownames(cooks),
     CookD = as.numeric(cooks)
   )
   cutoff <- 4 / length(cooks)
 
-  plot_influence <- ggplot(cooks_df, aes(x = CookD, y = Group)) +
-    geom_point(aes(color = CookD > cutoff), size = 3) +
-    scale_color_manual(values = c("FALSE" = "#B163FF", "TRUE" = "red")) +
-    geom_vline(xintercept = cutoff, linetype = "dashed", color = "red") +
-    geom_text_repel(
-      data = subset(cooks_df, CookD > cutoff),
-      aes(label = Group),
+  plot_influence <- ggplot2::ggplot(cooks_df, ggplot2::aes(x = CookD, y = Group)) +
+    ggplot2::geom_point(ggplot2::aes(color = CookD > cutoff), size = 3) +
+    ggplot2::scale_color_manual(values = c("FALSE" = "#B163FF", "TRUE" = "red")) +
+    ggplot2::geom_vline(xintercept = cutoff, linetype = "dashed", color = "red") +
+    ggrepel::geom_text_repel(
+      data = base::subset(cooks_df, CookD > cutoff),
+      ggplot2::aes(label = Group),
       color = "black",
       nudge_x = 0.01
     ) +
-    labs(
+    ggplot2::labs(
       title = "Cook's Distance by Cluster",
       x = "Cook's Distance",
       y = paste0("Cluster (", metadata$grouping_var, ")")
     ) +
-    theme_minimal() +
-    theme(
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
       legend.position = "none",
-      axis.text.x = element_text(angle = 45, hjust = 1)
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1)
     ) +
-    coord_flip()
+    ggplot2::coord_flip()
 
   list(
     plot_resid_fitted = plot_resid_fitted,
@@ -301,50 +368,57 @@
     fixed_plot = fixed_plot,
     plot_pairs = plot_pairs,
     plot_influence = plot_influence,
-    plots_effects = .build_diagnose_lmm_effect_plots(lmm, metadata$response_var)
+    plots_effects = .build_diagnose_lmm_effect_plots(
+      legacy_data_model,
+      metadata$response_var
+    )
   )
 }
 
 .build_diagnose_lmm_ui <- function(overfitting) {
-  fluidPage(
+  shiny::fluidPage(
 
-    titlePanel("Linear Mixed Model Evaluation"),
+    shiny::titlePanel("Linear Mixed Model Evaluation"),
 
-    fluidRow(
-      column(12, h3("Command")),
-      column(12, verbatimTextOutput("model_command")),
+    shiny::fluidRow(
+      shiny::column(12, shiny::h3("Command")),
+      shiny::column(12, shiny::verbatimTextOutput("model_command")),
     ),
 
-    fluidRow(
-      column(12, h3("Model Fit Statistics"), DTOutput("fit_stats")),
+    shiny::fluidRow(
+      shiny::column(12, shiny::h3("Model Fit Statistics"), DT::DTOutput("fit_stats")),
       if (overfitting) {
-        column(12, strong("Warning: The model may be overfitting (singular fit)."), style = "color: red;")
+        shiny::column(
+          12,
+          shiny::strong("Warning: The model may be overfitting (singular fit)."),
+          style = "color: red;"
+        )
       }
     ),
 
-    fluidRow(
-      column(6, h3("Fixed Effects"), DTOutput("fixed_effects")),
-      column(6, h3("Random Effects"), DTOutput("random_effects"))
+    shiny::fluidRow(
+      shiny::column(6, shiny::h3("Fixed Effects"), DT::DTOutput("fixed_effects")),
+      shiny::column(6, shiny::h3("Random Effects"), DT::DTOutput("random_effects"))
     ),
 
-    fluidRow(
-      column(6, h3("Fixed Effects Coefficients"), plotOutput("plot_fixed")),
-      column(6, h3("Random Effects Caterpillar"), plotOutput("plot_random"))
+    shiny::fluidRow(
+      shiny::column(6, shiny::h3("Fixed Effects Coefficients"), shiny::plotOutput("plot_fixed")),
+      shiny::column(6, shiny::h3("Random Effects Caterpillar"), shiny::plotOutput("plot_random"))
     ),
 
-    fluidRow(
-      column(6, h3("Residuals vs Fitted"), plotOutput("plot_resid_fitted")),
-      column(6, h3("Residuals Q-Q Plot"), plotOutput("plot_resid_qq"))
+    shiny::fluidRow(
+      shiny::column(6, shiny::h3("Residuals vs Fitted"), shiny::plotOutput("plot_resid_fitted")),
+      shiny::column(6, shiny::h3("Residuals Q-Q Plot"), shiny::plotOutput("plot_resid_qq"))
     ),
 
 
-    fluidRow(
-      column(6, h3("Cook's D"), plotOutput("plot_influence")),
-      column(6, h3("Variable Correlations"), plotOutput("plot_pairs")),
+    shiny::fluidRow(
+      shiny::column(6, shiny::h3("Cook's D"), shiny::plotOutput("plot_influence")),
+      shiny::column(6, shiny::h3("Variable Correlations"), shiny::plotOutput("plot_pairs")),
     ),
 
-    fluidRow(
-      column(12, h3("Predictor Effects"), plotOutput("all_effects"))
+    shiny::fluidRow(
+      shiny::column(12, shiny::h3("Predictor Effects"), shiny::plotOutput("all_effects"))
     )
   )
 }
@@ -352,30 +426,30 @@
 .build_diagnose_lmm_server <- function(model_command, tables, plots) {
   function(input, output, session) {
 
-    output$model_command <- renderText({ model_command })
+    output$model_command <- shiny::renderText({ model_command })
 
     if ("p.value" %in% names(tables$fixed_df)) {
-      output$fixed_effects <- renderDT({
-        datatable(tables$fixed_df, options = list(pageLength = 5)) %>%
-          formatStyle(
+      output$fixed_effects <- DT::renderDT({
+        DT::formatStyle(
+          DT::datatable(tables$fixed_df, options = list(pageLength = 5)),
             "p.value",
-            backgroundColor = styleInterval(
+            backgroundColor = DT::styleInterval(
               tables$thresholds$p_value_highlight,
               c("lightgreen", "")
             )
           )
       })
     } else {
-      output$fixed_effects <- renderDT({
-        datatable(tables$fixed_df, options = list(pageLength = 5))
+      output$fixed_effects <- DT::renderDT({
+        DT::datatable(tables$fixed_df, options = list(pageLength = 5))
       })
     }
 
-    output$random_effects <- renderDT({
-      datatable(tables$rand, options = list(pageLength = 5)) %>%
-        formatStyle(
+    output$random_effects <- DT::renderDT({
+      DT::formatStyle(
+        DT::datatable(tables$rand, options = list(pageLength = 5)),
           "Std_Dev",
-          backgroundColor = styleInterval(
+          backgroundColor = DT::styleInterval(
             tables$thresholds$residual_sd_highlight,
             c("", "lightcoral")
           )
@@ -384,14 +458,14 @@
 
     output$fit_stats <- DT::renderDataTable({ tables$fit_stats_df })
 
-    output$plot_resid_fitted <- renderPlot({ plots$plot_resid_fitted })
-    output$plot_resid_qq     <- renderPlot({ plots$plot_resid_qq })
-    output$plot_random       <- renderPlot({ plots$plot_random })
-    output$plot_fixed        <- renderPlot({ plots$fixed_plot })
-    output$plot_pairs        <- renderPlot({ plots$plot_pairs })
-    output$plot_influence    <- renderPlot({ plots$plot_influence })
-    output$all_effects <- renderPlot({
-      wrap_plots(
+    output$plot_resid_fitted <- shiny::renderPlot({ plots$plot_resid_fitted })
+    output$plot_resid_qq     <- shiny::renderPlot({ plots$plot_resid_qq })
+    output$plot_random       <- shiny::renderPlot({ plots$plot_random })
+    output$plot_fixed        <- shiny::renderPlot({ plots$fixed_plot })
+    output$plot_pairs        <- shiny::renderPlot({ plots$plot_pairs })
+    output$plot_influence    <- shiny::renderPlot({ plots$plot_influence })
+    output$all_effects <- shiny::renderPlot({
+      patchwork::wrap_plots(
         plots$plots_effects,
         ncol = length(plots$plots_effects)
       )
@@ -403,20 +477,6 @@
 diagnose_lmm <- function(lmm) {
   .validate_diagnose_lmm_input(lmm)
 
-  library(shiny)
-  library(lme4)
-  library(lmerTest)
-  library(broom.mixed)
-  library(performance)
-  library(DT)
-  library(dplyr)
-  library(ggplot2)
-  library(GGally)
-  library(influence.ME)
-  library(ggrepel)
-  library(patchwork)
-  library(effects)
-
   metadata <- .get_diagnose_lmm_metadata(lmm)
   thresholds <- .get_diagnose_lmm_thresholds()
   tables <- .build_diagnose_lmm_tables(lmm, metadata, thresholds)
@@ -424,5 +484,5 @@ diagnose_lmm <- function(lmm) {
   ui <- .build_diagnose_lmm_ui(tables$overfitting)
   server <- .build_diagnose_lmm_server(metadata$model_command, tables, plots)
 
-  shinyApp(ui, server)
+  shiny::shinyApp(ui, server)
 }
