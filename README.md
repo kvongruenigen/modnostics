@@ -15,7 +15,7 @@ Current supported model scope:
 - fitted `lmer` models
 - exactly one random-effects term
 - intercept-only random effects of the form `(1 | group)`
-- a model `data` argument supplied as a named object
+- standard `data` specifications, including named, namespaced, and inline data expressions
 
 ## Installation
 

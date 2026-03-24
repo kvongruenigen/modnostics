@@ -4,6 +4,20 @@ test_that("diagnose_lmm works", {
   expect_s3_class(diagnose_lmm(lmm), "shiny.appobj")
 })
 
+test_that("diagnose_lmm works with namespaced datasets", {
+  lmm <- lme4::lmer(Reaction ~ Days + (1 | Subject), data = lme4::sleepstudy)
+  expect_s3_class(diagnose_lmm(lmm), "shiny.appobj")
+})
+
+test_that("diagnose_lmm works with inline data expressions", {
+  lmm <- lme4::lmer(
+    Reaction ~ Days + (1 | Subject),
+    data = subset(lme4::sleepstudy, Days >= 0)
+  )
+
+  expect_s3_class(diagnose_lmm(lmm), "shiny.appobj")
+})
+
 test_that("diagnose_lmm rejects unsupported input types", {
   expect_error(
     diagnose_lmm(mtcars),
@@ -35,18 +49,5 @@ test_that("diagnose_lmm rejects random-slope models", {
   expect_error(
     diagnose_lmm(lmm),
     "intercept-only random-effects terms"
-  )
-})
-
-test_that("diagnose_lmm rejects models fit with non-symbol data expressions", {
-  sleepstudy <- lme4::sleepstudy
-  lmm <- lme4::lmer(
-    Reaction ~ Days + (1 | Subject),
-    data = subset(sleepstudy, Days >= 0)
-  )
-
-  expect_error(
-    diagnose_lmm(lmm),
-    "data` argument to be a named object"
   )
 })

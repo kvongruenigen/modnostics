@@ -7,8 +7,7 @@
 #' \itemize{
 #'   \item exactly one random-effects grouping term,
 #'   \item an intercept-only random-effects structure of the form
-#'   \code{(1 | group)}, and
-#'   \item a `data` argument supplied as a named object.
+#'   \code{(1 | group)}.
 #' }
 #'
 #' @param lmm A fitted `lmer` model that matches the currently supported model
@@ -16,8 +15,36 @@
 #' @return A Shiny app object.
 #' @export
 
+# Extract model metadata using stable accessors rather than direct slot parsing.
+.get_diagnose_lmm_metadata <- function(lmm) {
+  model_formula <- stats::formula(lmm)
+  fixed_formula <- suppressWarnings(lme4::nobars(model_formula))
+  model_frame <- stats::model.frame(lmm)
+  random_groups <- names(lme4::getME(lmm, "flist"))
+  response_var <- all.vars(fixed_formula)[1]
+  fixed_vars <- setdiff(all.vars(fixed_formula), response_var)
+
+  list(
+    model_command = paste(deparse(getCall(lmm)), collapse = "\n"),
+    model_formula = model_formula,
+    model_frame = model_frame,
+    response_var = response_var,
+    fixed_vars = fixed_vars,
+    grouping_var = random_groups[[1]]
+  )
+}
+
+# Build a model copy that uses influence.ME's built-in `data.update` fallback,
+# which refits from `model.frame(model)` instead of trying to resolve the
+# original data expression.
+.build_diagnose_lmm_influence_model <- function(lmm) {
+  lmm_influence <- lmm
+  lmm_influence@call$data <- quote(data.update)
+  lmm_influence
+}
+
 # Validate the subset of lmer models currently supported by the dashboard.
-validate_diagnose_lmm_input <- function(lmm) {
+.validate_diagnose_lmm_input <- function(lmm) {
   if (!inherits(lmm, c("lmerMod", "lmerModLmerTest"))) {
     stop(
       paste(
@@ -53,23 +80,26 @@ validate_diagnose_lmm_input <- function(lmm) {
     )
   }
 
-  if (!is.symbol(random_term[[3]])) {
+  random_groups <- names(lme4::getME(lmm, "flist"))
+
+  if (length(random_groups) != 1 || is.na(random_groups[[1]]) ||
+      identical(random_groups[[1]], "")) {
     stop(
       paste(
         "`diagnose_lmm()` currently supports a single grouping variable named",
-        "directly in the model formula."
+        "in the fitted model."
       ),
       call. = FALSE
     )
   }
 
-  data_expr <- getCall(lmm)$data
+  model_frame <- try(stats::model.frame(lmm), silent = TRUE)
 
-  if (is.null(data_expr) || !is.symbol(data_expr)) {
+  if (inherits(model_frame, "try-error")) {
     stop(
       paste(
-        "`diagnose_lmm()` currently requires the model `data` argument to be",
-        "a named object."
+        "`diagnose_lmm()` currently requires a fitted model with an",
+        "accessible model frame."
       ),
       call. = FALSE
     )
@@ -80,7 +110,8 @@ validate_diagnose_lmm_input <- function(lmm) {
 
 # Make function for dashboard
 diagnose_lmm <- function(lmm) {
-  validate_diagnose_lmm_input(lmm)
+  .validate_diagnose_lmm_input(lmm)
+  metadata <- .get_diagnose_lmm_metadata(lmm)
 
   # Load required packages
   library(shiny)
@@ -100,16 +131,20 @@ diagnose_lmm <- function(lmm) {
   ##############################################################################
 
   # Create a string for the model command
-  model_command <- deparse(lmm@call) # "lmer(formula = weight ~ Time + Diet + (1 | Chick), data = cw)"
+  model_command <- metadata$model_command
 
   # Create a string for the model formula
-  model_formula <- as.character(lmm@call)[2] # "weight ~ Time + Diet + (1 | Chick)"
+  model_formula <- paste(deparse(metadata$model_formula), collapse = "\n")
 
   # Make a list of the terms used in the model
-  model_terms <- all.vars(as.formula(model_formula)) # [1] "weight" "Time"   "Diet"   "Chick"
+  model_terms <- c(
+    metadata$response_var,
+    metadata$fixed_vars,
+    metadata$grouping_var
+  )
 
   # Make a list of the data classed of the data used in the model
-  data_classes <- sapply(eval(getCall(lmm)$data), class) # $weight [1] "numeric" $Time [1] "numeric" $Chick [1] "ordered" "factor" $Diet [1] "factor"
+  data_classes <- sapply(metadata$model_frame, class)
 
   ##############################################################################
 
@@ -154,7 +189,7 @@ diagnose_lmm <- function(lmm) {
   ## Random effects
   rand <- as.data.frame(VarCorr(lmm))[,c("vcov", "sdcor")] %>%
     mutate(
-      group = c(paste0(model_terms[length(model_terms)], " (Intercept)"), "Residual"),
+      group = c(paste0(metadata$grouping_var, " (Intercept)"), "Residual"),
       Variance = round(vcov, 3),
       Std_Dev = round(sdcor, 3)
     ) %>%
@@ -214,7 +249,7 @@ diagnose_lmm <- function(lmm) {
     geom_errorbar(aes(xmin = conf.low, xmax = conf.high), orientation = "y", height = 0.2) +
     facet_wrap(~ term, scales = "free_x") +
     theme_minimal() +
-    labs(x = "Estimate", y = model_terms[length(model_terms)])
+    labs(x = "Estimate", y = metadata$grouping_var)
 
 
   ## Fixed Effects Plot}
@@ -226,7 +261,7 @@ diagnose_lmm <- function(lmm) {
 
   ## Variable Correlations
   # Create pairwise plots for all variables in the model except the random effect
-  plot_pairs <- ggpairs(lmm@frame[, model_terms[-length(model_terms)]]) +
+  plot_pairs <- ggpairs(metadata$model_frame[, metadata$fixed_vars, drop = FALSE]) +
     theme_minimal() +
     theme(
       strip.text = element_text(size = 8),
@@ -238,7 +273,10 @@ diagnose_lmm <- function(lmm) {
   #   influenceIndexPlot(influence(lmm), groups = model_terms[length(model_terms)], grid = FALSE, main = "")
   # })
   # Influence analysis at cluster level (Chick)
-  infl <- influence(lmm, group = model_terms[length(model_terms)])
+  infl <- influence(
+    .build_diagnose_lmm_influence_model(lmm),
+    group = metadata$grouping_var
+  )
 
   # Extract Cook's distance
   cooks <- cooks.distance(infl)
@@ -268,7 +306,7 @@ diagnose_lmm <- function(lmm) {
     labs(
       title = "Cook's Distance by Cluster",
       x = "Cook's Distance",
-      y = paste0("Cluster (", model_terms[length(model_terms)], ")")
+      y = paste0("Cluster (", metadata$grouping_var, ")")
     ) +
     theme_minimal() +
     theme(
@@ -293,7 +331,7 @@ diagnose_lmm <- function(lmm) {
           labs(
             title = paste("Effect of", var),
             x = var,
-            y = paste0("Predicted ", model_terms[1])
+            y = paste0("Predicted ", metadata$response_var)
           )
       } else {
 
@@ -305,7 +343,7 @@ diagnose_lmm <- function(lmm) {
           labs(
             title = paste("Effect of", var),
             x = var,
-            y = paste0("Predicted ", model_terms[1])
+            y = paste0("Predicted ", metadata$response_var)
           )
       }
 

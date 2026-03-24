@@ -21,7 +21,6 @@ Supported inputs are currently limited to fitted `lmer` models with:
 \itemize{
   \item exactly one random-effects grouping term,
   \item an intercept-only random-effects structure of the form
-  \code{(1 | group)}, and
-  \item a `data` argument supplied as a named object.
+  \code{(1 | group)}.
 }
 }
