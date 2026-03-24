@@ -53,3 +53,23 @@ test_that("diagnose_lmm rejects random-slope models", {
     "intercept-only random-effects terms"
   )
 })
+
+test_that("diagnose_lmm accepts lmerTest models", {
+  sleepstudy <- lme4::sleepstudy
+  lmm <- lmerTest::lmer(Reaction ~ Days + (1 | Subject), data = sleepstudy)
+
+  expect_s3_class(diagnose_lmm(lmm), "shiny.appobj")
+})
+
+test_that("diagnose_lmm rejects models without grouping-variable metadata", {
+  sleepstudy <- lme4::sleepstudy
+  lmm <- lme4::lmer(Reaction ~ Days + (1 | Subject), data = sleepstudy)
+
+  broken_lmm <- lmm
+  broken_lmm@flist <- list()
+
+  expect_error(
+    diagnose_lmm(broken_lmm),
+    "single grouping variable named"
+  )
+})
