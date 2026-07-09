@@ -2,6 +2,8 @@ Package: modnostics
 Type: Package
 Title: Evaluation of Model Diagnostics
 Version: 0.1.0
+Author: Kay von Grünigen [aut, cre]
+Maintainer: Kay von Grünigen <kay.vongruenigen@gmail.com>
 Authors@R: c(
     person(
       "Kay", "von Grünigen",
@@ -9,11 +11,12 @@ Authors@R: c(
       role = c("aut", "cre")
     )
   )
-Description: This package provides tool for comprehensive model output generation
-             that should help evaluate the quality of a model. 
-             This is important since rarely model diagnostics are published and 
-             this should get normal routine and a gold standard.
-License: MIT + file license
+Description: Provides an interactive Shiny dashboard for reviewing
+    diagnostics from linear mixed-effects models fit with lme4.
+    The package combines model summaries, residual diagnostics,
+    influence checks, and effect visualizations in one place to
+    support a more consistent diagnostic workflow.
+License: MIT + file LICENSE
 Imports:
   shiny,
   lme4,
@@ -29,7 +32,6 @@ Imports:
   patchwork,
   effects
 Encoding: UTF-8
-LazyData: true
 RoxygenNote: 7.3.3
 Suggests: 
     testthat (>= 3.0.0)

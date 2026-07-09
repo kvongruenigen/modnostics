@@ -2,5 +2,30 @@
 .Rhistory
 .RData
 .Ruserdata
+.Rprofile
+.DS_Store
+..Rcheck/
+*.Rcheck/
+*.tar.gz
 Progress.Rmd
 notes.md
+
+# RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# renv local state
+renv/library/
+renv/staging/
+renv/python/
+
+# Package build/check
+*.Rcheck/
+..Rcheck/
+*.tar.gz
+
+# macOS
+.DS_Store
+*/.DS_Store

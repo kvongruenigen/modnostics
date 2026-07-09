@@ -13,5 +13,14 @@ diagnose_lmm(lmm)
 A Shiny app object.
 }
 \description{
-This function launches a Shiny dashboard to inspect diagnostics of an LMM.
+This function launches a Shiny dashboard to inspect diagnostics of a
+supported linear mixed-effects model.
+}
+\details{
+Supported inputs are currently limited to fitted `lmer` models with:
+\itemize{
+  \item exactly one random-effects grouping term,
+  \item an intercept-only random-effects structure of the form
+  \code{(1 | group)}.
+}
 }
